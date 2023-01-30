@@ -1,5 +1,0 @@
-# Request
-uint16 command
----
-# Response
-bool result

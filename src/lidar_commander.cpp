@@ -1,6 +1,6 @@
-#include "lidar_manager/lidar_manager.hpp"
-#include "sensor_msgs/point_cloud2_iterator.hpp"
+#include "lidar_manager/lidar_commander.hpp"
 #include "ConstForSF45.hpp"
+
 #include <fcntl.h>
 #include <getopt.h>
 #include <termios.h>
@@ -10,36 +10,16 @@
 #include <memory>
 #include <string>
 #include <utility>
+#include <chrono>
 
-LidarManager::LidarManager(const rclcpp::NodeOptions& node_options)
-    : Node("lidar_manager", node_options)
+using namespace std::chrono_literals;
+
+LidarCommander::LidarCommander(const rclcpp::NodeOptions& node_options)
+    : Node("lidar_commander", node_options)
 {
-    RCLCPP_INFO(this->get_logger(), "LidarManager node has been started.");
+    RCLCPP_INFO(this->get_logger(), "LidarCommander node has been started.");
 
-    this->declare_parameter("qos_depth", 10);
-    int8_t qos_depth = 0;
-    this->get_parameter("qos_depth", qos_depth);
-
-    const auto QOS_RKL10V(rclcpp::QoS(rclcpp::KeepLast(qos_depth)).reliable().durability_volatile());
-
-    m_lidarSubscriber = this->create_subscription<PointCloud2>(
-        "pointcloud",
-        QOS_RKL10V,
-        [this](const PointCloud2::SharedPtr msg) -> void
-        {
-            sensor_msgs::PointCloud2ConstIterator<float> iter_x(*msg, "x"), iter_y(*msg, "y"), iter_z(*msg, "z");
-            while (iter_x != iter_x.end()) {
-                // TODO: do something with the values of x, y, z
-                std::cout << *iter_x << ", " << *iter_y << ", " << *iter_z << std::endl;
-                ++iter_x; ++iter_y; ++iter_z;
-            }
-
-            // RCLCPP_INFO(this->get_logger(), "Timestamp of the message: %ld nanosec %ld", msg->stamp.sec, msg->stamp.nanosec);
-            // RCLCPP_INFO(this->get_logger(), "Received args: [%.2f, %.2f]", m_argumentA, m_argumentB);
-        }
-    );
-
-    m_commandClient = this->create_client<srv::SF45Command>("SF45Command");
+    m_commandClient = this->create_client<SF45Command>("sf45_command");
     while (!m_commandClient->wait_for_service(1s)) {
     if (!rclcpp::ok()) {
       RCLCPP_ERROR(this->get_logger(), "Interrupted while waiting for the service.");
@@ -51,12 +31,12 @@ LidarManager::LidarManager(const rclcpp::NodeOptions& node_options)
 
 
 
-void LidarManager::send_request()
+void LidarCommander::send_request()
 {
-  auto request = std::make_shared<srv::SF45Command::Request>();
-  request->command = SF45Commandset::ScanEnable;
+  auto request = std::make_shared<SF45Command::Request>();
+  request->command = static_cast<uint16_t>(SF45Commandset::ScanEnable);
 
-  using ServiceResponseFuture = rclcpp::Client<srv::SF45Command>::SharedFuture;
+  using ServiceResponseFuture = rclcpp::Client<SF45Command>::SharedFuture;
   auto response_received_callback = [this](ServiceResponseFuture future) {
       auto response = future.get();
       RCLCPP_INFO(this->get_logger(), "Result: %d", response->result);
@@ -132,12 +112,12 @@ int main(int argc, char * argv[])
 {
   rclcpp::init(argc, argv);
 
-  auto lidarManagerNode = std::make_shared<LidarManager>();
+  auto lidarCommanderNode = std::make_shared<LidarCommander>();
 
   while (rclcpp::ok()) 
   {
-    rclcpp::spin_some(lidarManagerNode);
-    lidarManagerNode->send_request();
+    rclcpp::spin_some(lidarCommanderNode);
+    lidarCommanderNode->send_request();
 
     printf("Press Enter for next service call.\n");
     if (pull_trigger() == false) {

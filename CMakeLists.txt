@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.5)
-project(lidar_manager)
+project(lidar_ros2)
 
 # Default to C99
 if(NOT CMAKE_C_STANDARD)
@@ -17,21 +17,9 @@ endif()
 
 # find dependencies
 find_package(ament_cmake REQUIRED)
+find_package(lidar_interface REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(sensor_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-find_package(builtin_interfaces REQUIRED)
-
-
-# Declare ROS messages, services and actions
-set(srv_files
-  "srv/SF45Command.srv"
-)
-
-rosidl_generate_interfaces(${PROJECT_NAME}
-  ${srv_files}
-  DEPENDENCIES builtin_interfaces
-)
 
 
 include_directories(
@@ -49,10 +37,13 @@ add_library(serialPortLinux src/sf45/linux/lwSerialPortLinux.cpp)
 # Build
 
 add_executable(sf45b src/sf45/sf45b.cpp)
-ament_target_dependencies(sf45b rclcpp sensor_msgs)
+ament_target_dependencies(sf45b rclcpp lidar_interface sensor_msgs)
 
-add_executable(lidar_manager src/lidar_manager.cpp)
-ament_target_dependencies(lidar_manager sensor_msgs rclcpp)
+add_executable(lidar_parser src/lidar_parser.cpp)
+ament_target_dependencies(lidar_parser sensor_msgs rclcpp)
+
+add_executable(lidar_commander src/lidar_commander.cpp)
+ament_target_dependencies(lidar_commander lidar_interface rclcpp)
 
 # target_include_directories(sf40c PRIVATE
 #   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include/lightwarelidar2>
@@ -70,7 +61,8 @@ target_link_libraries(sf45b
 
 install(TARGETS
   sf45b
-  lidar_manager
+  lidar_parser
+  lidar_commander
   DESTINATION lib/${PROJECT_NAME})
 
 
@@ -85,6 +77,4 @@ if(BUILD_TESTING)
   ament_lint_auto_find_test_dependencies()
 endif()
 
-
-ament_export_dependencies(rosidl_default_runtime)
 ament_package()

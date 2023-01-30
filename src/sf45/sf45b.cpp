@@ -6,31 +6,35 @@
 #include "ConstForSF45.hpp"
 #include "sf45b.hpp"
 
-#include "rclcpp/rclcpp.hpp"
-#include "sensor_msgs/msg/point_cloud2.hpp"
 #include <iostream>
 
 
 
-SF45b::SF45b(const rclcpp::NodeOptions& node_options)
+SF45::SF45(const rclcpp::NodeOptions& node_options)
     : Node("sf45b", node_options)
 {
     RCLCPP_INFO(this->get_logger(), "SF45 node has been started.");
 
 	m_lidarPublisher = this->create_publisher<PointCloud2>("pointcloud", 4);
 
-    m_commandServer 
-    = this->create_service<SF45Command>(
-        "sf45_command", 
-        [this](
-        const std::shared_ptr<SF45Command::Request> request, 
+    
+
+
+	auto do_command =
+     [this](const std::shared_ptr<SF45Command::Request> request, 
         const std::shared_ptr<SF45Command::Response> response) -> void
     {
+		RCLCPP_INFO(get_logger(), "Command received.");
+
         uint16_t command = request->command;
 		bool result = execute_command(command);
         response->result = result;
 		std::cout<<"SF45 Command received: "<<result<<std::endl;
-    });
+    };
+
+
+	m_commandServer 
+    = create_service<SF45Command>("sf45_command", do_command);
 }
 
 
@@ -59,13 +63,16 @@ void validateParams(lwSf45Params* Params)
 
 
 
- void SF45b::initialize_point_cloud_message(const std::string& frameId, const int32_t& maxPointsPerMsg)
+ void SF45::initialize_point_cloud_message(const std::string& frameId, const int32_t& numPointsPerMsg)
  {
-	m_maxPointsPerMsg = maxPointsPerMsg;
+	m_numPointsPerMsg = numPointsPerMsg;
+
+	m_distanceResults.resize(m_numPointsPerMsg);
+	m_rawDistances.resize(m_numPointsPerMsg);
 
 	m_pointCloudMsg.header.frame_id = frameId;
 	m_pointCloudMsg.height = 1;
-	m_pointCloudMsg.width = maxPointsPerMsg;
+	m_pointCloudMsg.width = numPointsPerMsg;
 	
 	m_pointCloudMsg.fields.resize(3);
 	m_pointCloudMsg.fields[0].name = "x";
@@ -85,22 +92,22 @@ void validateParams(lwSf45Params* Params)
 
 	m_pointCloudMsg.is_bigendian = false;
 	m_pointCloudMsg.point_step = 12;
-	m_pointCloudMsg.row_step = 12 * m_maxPointsPerMsg;
+	m_pointCloudMsg.row_step = 12 * m_numPointsPerMsg;
 	m_pointCloudMsg.is_dense = true;
 
-	m_pointCloudMsg.data = std::vector<uint8_t>(m_maxPointsPerMsg * 12);
+	m_pointCloudMsg.data = std::vector<uint8_t>(m_numPointsPerMsg * 12);
  }
 
 
 
-bool SF45b::initialize_serial_driver(const char* PortName, int32_t BaudRate) 
+bool SF45::initialize_serial_driver(const char* PortName, int32_t BaudRate) 
 {
 	platformInit();
 
 	m_serial = platformCreateSerialPort();
 
 	if (!m_serial->connect(PortName, BaudRate)) {
-		RCLCPP_ERROR(node->get_logger(), "Could not establish serial connection on %s", PortName);
+		RCLCPP_ERROR(this->get_logger(), "Could not establish serial connection on %s", PortName);
 		return false;
 	};
 
@@ -135,7 +142,7 @@ bool SF45b::initialize_serial_driver(const char* PortName, int32_t BaudRate)
 
 
 
-bool SF45b::initialize_lidar(lwSf45Params* Params) 
+bool SF45::initialize_lidar(lwSf45Params* Params) 
 {
 	// Configre distance output for first return and angle. (Command 27: Distance output)
 	if (!lwnxCmdWriteUInt32(m_serial, 27, 0x101)) { return false; }
@@ -161,7 +168,7 @@ bool SF45b::initialize_lidar(lwSf45Params* Params)
 
 
 
-bool SF45b::parse_received_measurement()
+bool SF45::parse_received_measurement()
 {
 	lwDistanceResult distanceResult;
 	rawDistanceResult rawDistanceResult;
@@ -179,59 +186,44 @@ bool SF45b::parse_received_measurement()
 	float angle = angleHundredths / 100.0f;
 	float faceAngle = (angle - 90) * M_PI / 180.0;
 
-	DistanceResult.x = distance * -cos(faceAngle);
-	DistanceResult.y = distance * sin(faceAngle);
-	DistanceResult.z = 0;
+	distanceResult.x = distance * -cos(faceAngle);
+	distanceResult.y = distance * sin(faceAngle);
+	distanceResult.z = 0;
 
-	RawDistanceResult.distance = distance;
-	RawDistanceResult.angle = degreesToRadians(angle);
+	rawDistanceResult.distance = distance;
+	rawDistanceResult.angle = degreesToRadians(angle);
 
-	distanceResults[m_currentPoint] = distanceResult;
-	rawDistances[m_currentPoint] = rawDistanceResult;
+	m_distanceResults[m_currentPoint] = distanceResult;
+	m_rawDistances[m_currentPoint] = rawDistanceResult;
 	++m_currentPoint;
 
-
-	if (status == 0) {
-				break;
-			} else {
-				
-			}
-
-			if (currentPoint == maxPointsPerMsg) {
-				memcpy(&pointCloudMsg.data[0], &distanceResults[0], maxPointsPerMsg * 12);
-				auto scanTime = node->now().seconds() - pointCloudMsg.header.stamp.sec;
-
-				pointCloudMsg.header.stamp = node->now();
-				pointCloudPub->publish(pointCloudMsg);
-
-				if (publishLaserScan)
-				{
-					auto laserScanMsg = getLaserScanMessage(currentPoint, rawDistances, &params, scanTime, node->get_logger());
-					laserScanMsg.header = pointCloudMsg.header;
-
-					laserScanPub->publish(laserScanMsg);
-				}
-
-				currentPoint = 0;
-			}
+	if (m_currentPoint == m_numPointsPerMsg) 
+	{
+		memcpy(&m_pointCloudMsg.data[0], &m_distanceResults[0], m_numPointsPerMsg * 12);
+		m_pointCloudMsg.header.stamp = this->now();
+		m_lidarPublisher->publish(m_pointCloudMsg);
+		m_currentPoint = 0;
+	}
 }
 
 
 
-bool execute_command(const uint16_t& command)
+bool SF45::execute_command(const uint16_t& command)
 {
 	bool result = false;
 
 	switch(command)
 	{
-	case SF45_command::ScanEnable:
+	case static_cast<uint16_t>(SF45Commandset::ScanEnable):
 		m_isOperated = !m_isOperated;
-		result = lwnxCmdWriteUInt8(m_serial, SF45_command::ScanEnable, m_isOperated);
-		std::cout<<"Scan enable command executed"<<std::endl;
+		result = lwnxCmdWriteUInt8(m_serial, command, m_isOperated);
+		std::cout<<"Scan enable command executed: "<<result<<std::endl;
 		break;
 	default:
 		break;
 	}
+
+	return result;
 }
 
 
@@ -261,7 +253,7 @@ int main(int argc, char** argv)
 	params.highAngleLimit = sf45->declare_parameter<int32_t>("highAngleLimit", 45.0f); // 10 to 160
 	validateParams(&params);
 
-	result = initialize_lidar(&params);
+	result = sf45->initialize_lidar(&params);
 	if (result == false) 
 	{
 		RCLCPP_ERROR(sf45->get_logger(), "Failed to start scan");
@@ -279,42 +271,8 @@ int main(int argc, char** argv)
 
 	while (rclcpp::ok()) 
 	{
-
-		while (true) 
-		{
-			lwDistanceResult distanceResult;
-			rawDistanceResult rawDistanceResult;
-
-			result = sf45->parse_received_measurement(&distanceResult, &rawDistanceResult);
-
-			if (status == 0) {
-				break;
-			} else {
-				distanceResults[currentPoint] = distanceResult;
-				rawDistances[currentPoint] = rawDistanceResult;
-				++currentPoint;
-			}
-
-			if (currentPoint == maxPointsPerMsg) {
-				memcpy(&pointCloudMsg.data[0], &distanceResults[0], maxPointsPerMsg * 12);
-				auto scanTime = node->now().seconds() - pointCloudMsg.header.stamp.sec;
-
-				pointCloudMsg.header.stamp = node->now();
-				pointCloudPub->publish(pointCloudMsg);
-
-				if (publishLaserScan)
-				{
-					auto laserScanMsg = getLaserScanMessage(currentPoint, rawDistances, &params, scanTime, node->get_logger());
-					laserScanMsg.header = pointCloudMsg.header;
-
-					laserScanPub->publish(laserScanMsg);
-				}
-
-				currentPoint = 0;
-			}
-		}
-
-		rclcpp::spin_some(node);
+		result = sf45->parse_received_measurement();
+		rclcpp::spin_some(sf45);
 	}
 
 	rclcpp::shutdown();

@@ -1,4 +1,5 @@
 #pragma once
+#include <map>
 
 std::map<int, int> updateRateMap = {
 		{1, 50},
@@ -38,7 +39,7 @@ struct rawDistanceResult
 
 
 // You may refer here for specific commands: https://support.lightware.co.za/sf45b/#/commands - JHCha at 221206
-enum class SF45_command
+enum class SF45Commandset
 {
 	ProductName = 0,
 	Token = 10,
